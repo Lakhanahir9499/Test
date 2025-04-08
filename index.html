@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>VIP MOD PANEL Login</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #0f0f0f;
+      color: white;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+    }
+    input {
+      padding: 10px;
+      margin: 10px;
+      width: 250px;
+      border-radius: 6px;
+      border: none;
+      font-size: 16px;
+    }
+    button {
+      padding: 10px 20px;
+      background: #00ff8c;
+      border: none;
+      border-radius: 6px;
+      font-size: 16px;
+      color: black;
+      cursor: pointer;
+    }
+    #message {
+      margin-top: 20px;
+      font-size: 16px;
+    }
+  </style>
+</head>
+<body>
+
+  <h2>VIP MOD PANEL LOGIN</h2>
+  <input type="text" id="license" placeholder="Enter your License Key">
+  <button onclick="verifyKey()">Login</button>
+
+  <div id="message"></div>
+
+  <script>
+    function verifyKey() {
+      const userKey = document.getElementById("license").value;
+      const msg = document.getElementById("message");
+      msg.innerText = "Checking license...";
+
+      fetch("https://lkcinema.online/connect")
+        .then(res => res.json())
+        .then(data => {
+          const validKey = data.web_info.license;
+          if (userKey === validKey) {
+            msg.style.color = "lime";
+            msg.innerText = "License Verified! Redirecting...";
+            setTimeout(() => {
+              // Redirect to panel
+              window.location.href = "dashboard.html"; // <-- panel page
+            }, 1500);
+          } else {
+            msg.style.color = "red";
+            msg.innerText = "Invalid License Key!";
+          }
+        })
+        .catch(err => {
+          msg.style.color = "orange";
+          msg.innerText = "Error connecting to server!";
+          console.error(err);
+        });
+    }
+  </script>
+
+</body>
+</html>
