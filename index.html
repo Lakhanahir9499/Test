@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Three.js GPGPU Birds - Standalone</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #000; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+<script type="module">
+
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.148.0/build/three.module.js';
+import { GPUComputationRenderer } from 'https://cdn.jsdelivr.net/npm/three@0.148.0/examples/jsm/misc/GPUComputationRenderer.js';
+
+const BIRD_TEXTURE_WIDTH = 32;
+const BIRD_TEXTURE_HEIGHT = 32;
+const BIRD_COUNT = BIRD_TEXTURE_WIDTH * BIRD_TEXTURE_HEIGHT;
+
+let renderer, scene, camera, gpuCompute;
+let velocityVariable, positionVariable;
+let birdUniforms, birdMesh;
+let clock = new THREE.Clock();
+
+init();
+animate();
+
+function init() {
+  renderer = new THREE.WebGLRenderer();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  document.body.appendChild(renderer.domElement);
+
+  scene = new THREE.Scene();
+
+  camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 1, 1000);
+  camera.position.z = 350;
+
+  // GPUComputationRenderer init
+  gpuCompute = new GPUComputationRenderer(BIRD_TEXTURE_WIDTH, BIRD_TEXTURE_HEIGHT, renderer);
+
+  if (!renderer.capabilities.isWebGL2) {
+    alert("WebGL2 is required but not supported by your browser.");
+    return;
+  }
+
+  // Create data textures for positions and velocities
+  const dtPosition = gpuCompute.createTexture();
+  const dtVelocity = gpuCompute.createTexture();
+
+  fillPositionTexture(dtPosition);
+  fillVelocityTexture(dtVelocity);
+
+  // Add variables
+  velocityVariable = gpuCompute.addVariable("textureVelocity", velocityShader(), dtVelocity);
+  positionVariable = gpuCompute.addVariable("texturePosition", positionShader(), dtPosition);
+
+  gpuCompute.setVariableDependencies(velocityVariable, [positionVariable, velocityVariable]);
+  gpuCompute.setVariableDependencies(positionVariable, [positionVariable, velocityVariable]);
+
+  velocityVariable.material.uniforms.time = { value: 0.0 };
+  velocityVariable.material.uniforms.delta = { value: 0.0 };
+
+  positionVariable.material.uniforms.time = { value: 0.0 };
+  positionVariable.material.uniforms.delta = { value: 0.0 };
+
+  const error = gpuCompute.init();
+  if (error !== null) {
+    console.error(error);
+  }
+
+  // Bird geometry - simple triangle for each bird
+  const birdGeometry = new THREE.BufferGeometry();
+  const vertices = new Float32Array([
+    0, -0.5, 0,
+    1, 0, 0,
+    0, 0.5, 0
+  ]);
+  birdGeometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+
+  birdUniforms = {
+    texturePosition: { value: null },
+    textureVelocity: { value: null },
+    time: { value: 0.0 },
+  };
+
+  const birdMaterial = new THREE.ShaderMaterial({
+    uniforms: birdUniforms,
+    vertexShader: birdVertexShader(),
+    fragmentShader: birdFragmentShader(),
+    side: THREE.DoubleSide,
+    transparent: false,
+  });
+
+  birdMesh = new THREE.InstancedMesh(birdGeometry, birdMaterial, BIRD_COUNT);
+  scene.add(birdMesh);
+
+  window.addEventListener('resize', onWindowResize);
+}
+
+function fillPositionTexture(texture) {
+  const data = texture.image.data;
+  for(let i = 0; i < data.length; i += 4) {
+    data[i] = (Math.random() * 2 - 1) * 100;      // x
+    data[i + 1] = (Math.random() * 2 - 1) * 100;  // y
+    data[i + 2] = (Math.random() * 2 - 1) * 100;  // z
+    data[i + 3] = 1.0;
+  }
+}
+
+function fillVelocityTexture(texture) {
+  const data = texture.image.data;
+  for(let i = 0; i < data.length; i += 4) {
+    data[i] = (Math.random() * 2 - 1) * 10;
+    data[i + 1] = (Math.random() * 2 - 1) * 10;
+    data[i + 2] = (Math.random() * 2 - 1) * 10;
+    data[i + 3] = 1.0;
+  }
+}
+
+function velocityShader() {
+  return `
+    uniform float time;
+    uniform float delta;
+    uniform sampler2D texturePosition;
+    uniform sampler2D textureVelocity;
+    varying vec2 vUv;
+
+    void main() {
+      vec2 uv = gl_FragCoord.xy / resolution.xy;
+
+      vec4 pos = texture2D(texturePosition, uv);
+      vec4 vel = texture2D(textureVelocity, uv);
+
+      vec3 velocity = vel.xyz;
+
+      // Bounce off bounds cube (-100 to 100)
+      if(pos.x < -100.0 || pos.x > 100.0) velocity.x = -velocity.x;
+      if(pos.y < -100.0 || pos.y > 100.0) velocity.y = -velocity.y;
+      if(pos.z < -100.0 || pos.z > 100.0) velocity.z = -velocity.z;
+
+      gl_FragColor = vec4(velocity, 1.0);
+    }
+  `;
+}
+
+function positionShader() {
+  return `
+    uniform float time;
+    uniform float delta;
+    uniform sampler2D texturePosition;
+    uniform sampler2D textureVelocity;
+
+    void main() {
+      vec2 uv = gl_FragCoord.xy / resolution.xy;
+
+      vec4 pos = texture2D(texturePosition, uv);
+      vec4 vel = texture2D(textureVelocity, uv);
+
+      vec3 position = pos.xyz + vel.xyz * delta;
+
+      gl_FragColor = vec4(position, 1.0);
+    }
+  `;
+}
+
+function birdVertexShader() {
+  return `
+    uniform sampler2D texturePosition;
+    uniform sampler2D textureVelocity;
+    uniform float time;
+
+    attribute vec3 position;
+
+    void main() {
+      vec2 uv = vec2(
+        float(gl_InstanceID % ${BIRD_TEXTURE_WIDTH}.0) / ${BIRD_TEXTURE_WIDTH}.0,
+        float(gl_InstanceID / ${BIRD_TEXTURE_WIDTH}.0) / ${BIRD_TEXTURE_WIDTH}.0
+      );
+
+      vec3 birdPos = texture2D(texturePosition, uv).xyz;
+      vec3 birdVel = texture2D(textureVelocity, uv).xyz;
+
+      vec3 velocity = normalize(birdVel);
+      float angle = atan(velocity.y, velocity.x);
+      float cosA = cos(angle);
+      float sinA = sin(angle);
+
+      mat3 rotation = mat3(
+        cosA, -sinA, 0.0,
+        sinA, cosA, 0.0,
+        0.0, 0.0, 1.0
+      );
+
+      vec3 rotatedPosition = rotation * position;
+      vec3 finalPosition = rotatedPosition + birdPos;
+
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(finalPosition, 1.0);
+    }
+  `;
+}
+
+function birdFragmentShader() {
+  return `
+    void main() {
+      gl_FragColor = vec4(1.0, 0.8, 0.1, 1.0);
+    }
+  `;
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  let delta = clock.getDelta();
+
+  velocityVariable.material.uniforms.time.value += delta;
+  velocityVariable.material.uniforms.delta.value = delta;
+
+  positionVariable.material.uniforms.time.value += delta;
+  positionVariable.material.uniforms.delta.value = delta;
+
+  gpuCompute.compute();
+
+  birdUniforms.texturePosition.value = gpuCompute.getCurrentRenderTarget(positionVariable).texture;
+  birdUniforms.textureVelocity.value = gpuCompute.getCurrentRenderTarget(velocityVariable).texture;
+  birdUniforms.time.value += delta;
+
+  renderer.render(scene, camera);
+}
+
+function onWindowResize() {
+  camera.aspect = window.innerWidth/window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+</script>
+</body>
+</html>
