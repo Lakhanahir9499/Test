@@ -7,12 +7,17 @@
   font-family: 'Poppins', sans-serif;
 }
 
+:root {
+  --primary: #6c5ce7;
+  --secondary: #a29bfe;
+}
+
 body {
   display: flex;
   justify-content: center;
   align-items: center;
   min-height: 100vh;
-  background: #1f293a;
+  background: linear-gradient(45deg, var(--primary), var(--secondary));
 }
 
 .container {
